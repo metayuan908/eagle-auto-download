@@ -1,0 +1,4 @@
+interface:
+  display_name: "Eagle自动化下载"
+  short_description: "从品牌网站批量采集项目图片视频并导入 Eagle 资源库"
+  default_prompt: "使用 $eagle-auto-download 采集这些品牌项目素材并写入指定 Eagle 资源库。"

@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "sites": [],
+  "project_metadata": {},
+  "tagging": {
+    "category_examples": [
+      "儿童",
+      "科技",
+      "医疗",
+      "工业",
+      "能源",
+      "企业",
+      "餐饮"
+    ],
+    "include_industry_keywords": true
+  },
+  "schedule": {
+    "frequency": "weekly",
+    "weekday": null,
+    "time": null,
+    "timezone": null,
+    "catch_up": "once"
+  },
+  "first_run": {
+    "mode": null,
+    "recommended_mode": "baseline_only"
+  },
+  "collection": {
+    "external_video_mode": null,
+    "download_failure_fallback": null,
+    "download_failure_fallback_after": 3,
+    "highest_available_quality": true,
+    "preserve_animation": true,
+    "transcode": false,
+    "webp_to_jpeg": {
+      "enabled": true,
+      "quality": 95,
+      "subsampling": 0,
+      "background": "#FFFFFF",
+      "preserve_dimensions": true,
+      "keep_downloaded_original": true,
+      "animated_policy": "preserve_original_and_generate_jpeg_preview"
+    },
+    "existing_project_updates": false,
+    "max_concurrent_downloads": 2,
+    "request_delay_seconds": 1,
+    "retry_limit": 3,
+    "shared_metadata_policy": "review"
+  },
+  "eagle": {
+    "base_url": "http://localhost:41595",
+    "expected_library_path": null,
+    "root_folder": null,
+    "batch_size": 20,
+    "export_eaglepack": false
+  },
+  "paths": {
+    "state_db": "data/state.sqlite",
+    "downloads": "downloads",
+    "reports": "reports"
+  }
+}
