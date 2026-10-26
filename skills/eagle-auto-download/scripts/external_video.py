@@ -1,7 +1,8 @@
-"""Download permitted Vimeo files through its public Download control.
+"""Download project-linked Vimeo and Adobe CCV files with durable checkpoints.
 
 Checkpoint validated files, pause without scheduling more work, and reconcile
-local caches without network access. yt-dlp remains an optional player fallback.
+local caches without network access. Vimeo prefers its official Download menu;
+Adobe uses its project-linked public HTML5 player.
 """
 import argparse
 import fcntl
@@ -30,6 +31,7 @@ from collector import load_config, prepare, state
 from media import atomic_write, prepare_video, sha256
 
 GITHUB_SOURCES = [
+    'https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/generic.py',
     'https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/vimeo.py',
     'https://github.com/yt-dlp/yt-dlp/issues/5492',
     'https://github.com/yt-dlp/yt-dlp#format-selection',
@@ -245,11 +247,11 @@ def candidates(config):
     with state(config) as db:
         records = [json.loads(row[0]) for row in db.execute('SELECT record FROM assets')]
     done = {(r['project_url'], source) for r in records
-            if r.get('media_type') == 'video' and r.get('external_provider') == 'vimeo'
+            if r.get('media_type') == 'video' and r.get('external_provider') in ('vimeo', 'adobe-ccv')
             for source in set([r['asset_url']] + r.get('sources', []))}
     links = {}
     for record in records:
-        if record.get('media_type') != 'bookmark' or record.get('external_provider') != 'vimeo':
+        if record.get('media_type') != 'bookmark' or record.get('external_provider') not in ('vimeo', 'adobe-ccv'):
             continue
         if record.get('download_fallback') and not config.get('collection', {}).get('recheck_download_fallbacks'):
             continue
@@ -281,7 +283,8 @@ def record_download_failure(config, record, kind, detail, attempt_id=None):
                         kind, safe_error(detail)))
             attempts = int(current.get('download_attempts', 0)) + 1
             current['download_attempts'] = attempts
-            enabled = config.get('collection', {}).get('download_failure_fallback') == 'bookmarks'
+            enabled = (record.get('external_provider') == 'vimeo' and
+                       config.get('collection', {}).get('download_failure_fallback') == 'bookmarks')
             fallback_after = max(1, int(config.get('collection', {}).get(
                 'download_failure_fallback_after', config.get('collection', {}).get('retry_limit', 3))))
             reason = None
@@ -301,6 +304,9 @@ def record_download_failure(config, record, kind, detail, attempt_id=None):
 
 def cached_download(record, directory):
     """Validate a local cache without HTTP or Eagle writes. Ignore stale caches."""
+    if record.get('external_provider') == 'adobe-ccv':
+        from adobe_ccv import cached_download as adobe_cache
+        return adobe_cache(record, directory)
     player_url(record['asset_url'])
     target_dir = directory / 'vimeo' / urlsplit(record['asset_url']).path.strip('/')
     complete = target_dir / 'complete.json'
@@ -373,7 +379,7 @@ def select_official_download(formats, source_url):
                                        f.get('filesize') or 0))
 
 
-def download_official(record, target_dir):
+def download_official(record, target_dir, cache_directory=None):
     selected = select_official_download(record['official_downloads'], record['asset_url'])
     target_dir.mkdir(parents=True, exist_ok=True)
     target = target_dir / 'video.mp4'
@@ -403,7 +409,7 @@ def download_official(record, target_dir):
                 raise ValueError('官方视频文件下载不完整')
             stream.flush()
             os.fsync(stream.fileno())
-        validation = prepare_video(temporary)[0]
+        validation = prepare_video(temporary, cache_directory)[0]
         if selected.get('height') and validation['height'] < selected['height']:
             raise ValueError('实际视频分辨率低于官方标注')
         os.replace(temporary, target)
@@ -420,7 +426,10 @@ def download_official(record, target_dir):
             os.unlink(temporary)
 
 
-def download_one(record, directory):
+def download_one(record, directory, *, proxy=None, retries=3):
+    if record.get('external_provider') == 'adobe-ccv':
+        from adobe_ccv import download_one as adobe_download
+        return adobe_download(record, directory, proxy=proxy, retries=retries)
     player_url(record['asset_url'])
     video_id = urlsplit(record['asset_url']).path.strip('/')
     target_dir = directory / 'vimeo' / video_id
@@ -454,7 +463,7 @@ def _download_one(record, directory):
             # watch page is unavailable. Use only the player URL extracted from
             # the source project's page; never infer a download URL.
     if record.get('official_downloads'):
-        metadata = download_official(record, target_dir)
+        metadata = download_official(record, target_dir, directory.parent / 'video-validation')
         atomic_write(complete, json.dumps(metadata, ensure_ascii=False, indent=2).encode())
         return {**source_record, **metadata}
     video_url = source_player_url(record)
@@ -482,7 +491,7 @@ def _download_one(record, directory):
     file = Path(finished[-1]).resolve(strict=True)
     if file.parent != target_dir.resolve() or not file.stat().st_size:
         raise RuntimeError('下载文件路径或大小校验失败')
-    validation = prepare_video(file)[0]
+    validation = prepare_video(file, directory.parent / 'video-validation')[0]
     metadata = {
         'local_path': str(file), 'sha256': sha256(file),
         'external_provider': 'vimeo', 'media_type': 'video',
@@ -568,7 +577,12 @@ def run(config, limit=None, project_url=None, execute=False, official_links=None
         report['plan'] = []
         for row in selected:
             cached = cached_download(row, directory) if directory else None
-            report['plan'].append({'source_url': row['asset_url'], 'player_url': player_url(row['asset_url']),
+            if row.get('external_provider') == 'adobe-ccv':
+                from adobe_ccv import player_url as adobe_player
+                playback = adobe_player(row['asset_url'])
+            else:
+                playback = player_url(row['asset_url'])
+            report['plan'].append({'source_url': row['asset_url'], 'player_url': playback,
                                    'referer': row['project_url'],
                                    'phase': 'cached_ready_to_prepare' if cached else 'needs_download'})
         report['cached_ready_to_prepare'] = sum(row['phase'] == 'cached_ready_to_prepare' for row in report['plan'])
@@ -588,7 +602,11 @@ def run(config, limit=None, project_url=None, execute=False, official_links=None
                 report['paused'] = True
             while not halted and cursor < len(selected) and len(pending) < workers:
                 record = selected[cursor]
-                pending[pool.submit(download_one, record, directory)] = record
+                kwargs = {}
+                if record.get('external_provider') == 'adobe-ccv':
+                    kwargs = {'proxy': config.get('collection', {}).get('external_video_proxy'),
+                              'retries': config.get('collection', {}).get('external_video_retries', 3)}
+                pending[pool.submit(download_one, record, directory, **kwargs)] = record
                 cursor += 1
             if not pending:
                 break

@@ -2,6 +2,7 @@
 import json
 import re
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import unquote, urlencode, urlsplit
 from urllib.request import Request, urlopen
@@ -31,10 +32,24 @@ class Eagle:
         self._digests = {}
         self._deadline = None
         self._offset_mode = None
-        self.metrics = {'requests': 0, 'full_scans': 0, 'folder_tree_reads': 0}
+        self.metrics = {'requests': 0, 'full_scans': 0, 'folder_tree_reads': 0,
+                        'endpoints': {}}
 
     def request(self, endpoint, payload=None):
         self.metrics['requests'] += 1
+        metric = self.metrics['endpoints'].setdefault(
+            urlsplit(endpoint).path, {'requests': 0, 'seconds': 0.0, 'errors': 0})
+        metric['requests'] += 1
+        started = time.monotonic()
+        try:
+            return self._request(endpoint, payload)
+        except Exception:
+            metric['errors'] += 1
+            raise
+        finally:
+            metric['seconds'] += time.monotonic() - started
+
+    def _request(self, endpoint, payload=None):
         data = None if payload is None else json.dumps(payload).encode('utf-8')
         request = Request(self.base_url + endpoint, data=data,
                           headers={'Content-Type': 'application/json'})
@@ -118,7 +133,19 @@ class Eagle:
         return list(self._items.values())
 
     def info(self, item_id):
+        with self._library_read():
+            return self._info(item_id)
+
+    @contextmanager
+    def _library_read(self):
+        """One bounded read/verification operation; writes keep their own guard."""
         self.check_library()
+        try:
+            yield
+        finally:
+            self.check_library()
+
+    def _info(self, item_id):
         try:
             item = self.request('/api/item/info?' + urlencode({'id': item_id}))
         except HTTPError as exc:
@@ -131,12 +158,14 @@ class Eagle:
             raise RuntimeError('Eagle 返回了其他条目的身份')
         if self._items is not None:
             self._items[item_id] = item
-        self.check_library()
         return item
 
     def file_digest(self, item):
         """Read an Eagle original without writing library internals; API identity first."""
-        self.check_library()
+        with self._library_read():
+            return self._file_digest(item)
+
+    def _file_digest(self, item):
         item_id = item['id']
         if not re.fullmatch(r'[A-Za-z0-9_-]+', item_id):
             raise ValueError('Eagle 条目 ID 格式异常')
@@ -157,14 +186,14 @@ class Eagle:
             if (after.st_size, after.st_mtime_ns) != (stat.st_size, stat.st_mtime_ns):
                 raise RuntimeError('Eagle 原件在验收时发生变化')
             self._digests[key] = digest
-        self.check_library()
         return self._digests[key]
 
     def verify_file(self, item_id, digest):
-        item = self.info(item_id)
-        if not item or self.file_digest(item) != digest:
-            raise RuntimeError('Eagle 文件身份验收失败：条目缺失或原件哈希不一致')
-        return item
+        with self._library_read():
+            item = self._info(item_id)
+            if not item or self._file_digest(item) != digest:
+                raise RuntimeError('Eagle 文件身份验收失败：条目缺失或原件哈希不一致')
+            return item
 
     def find_content_matches(self, digest, path, known_ids=()):
         size = Path(path).stat().st_size
@@ -313,10 +342,29 @@ class Eagle:
             self._deadline = previous
         return []
 
-    def verify_item(self, item_id, expected, folder_id, bookmark=False):
+    def verify_item(self, item_id, expected, folder_id, bookmark=False, digest=None, file_item=None):
         """Accept observable metadata, not merely a successful submission response."""
-        self.check_library()
-        current = self.request('/api/item/info?' + urlencode({'id': item_id}))
+        with self._library_read():
+            if digest is not None:
+                content_item = file_item if file_item is not None else self._info(item_id)
+                if (bookmark or not content_item or content_item.get('id') != item_id or
+                        content_item.get('isDeleted') or self._file_digest(content_item) != digest):
+                    raise RuntimeError('Eagle 文件身份验收失败：条目缺失或原件哈希不一致')
+            # Read metadata after hashing, including when the caller supplied a
+            # visibility snapshot. Never accept a stale snapshot after an update.
+            current = self._info(item_id)
+            self._verify_metadata(current, expected, folder_id)
+            if digest is not None:
+                if any(current.get(k) != content_item.get(k) for k in ('name', 'ext')):
+                    raise RuntimeError('Eagle 原件路径在验收时发生变化')
+            if bookmark:
+                if current.get('ext') != 'url':
+                    raise RuntimeError('Eagle 外链格式验收失败')
+                self.verify_bookmark_thumbnail(item_id)
+            return current
+
+    @staticmethod
+    def _verify_metadata(current, expected, folder_id):
         wanted_url = expected.get('website', expected.get('url'))
         if (not current or current.get('isDeleted') or
                 normalized_eagle_name(current.get('name', '')) !=
@@ -326,11 +374,6 @@ class Eagle:
                 not set(expected.get('tags', [])).issubset(current.get('tags', [])) or
                 folder_id not in current.get('folders', [])):
             raise RuntimeError('Eagle 回读验收失败：名称、来源、中文简介、标签或项目文件夹不一致；停止本批')
-        if bookmark:
-            if current.get('ext') != 'url':
-                raise RuntimeError('Eagle 外链格式验收失败')
-            self.verify_bookmark_thumbnail(item_id)
-        return current
 
     def verify_bookmark_thumbnail(self, item_id, attempts=40):
         """Wait for Eagle's asynchronous bookmark poster, refreshing once if needed."""

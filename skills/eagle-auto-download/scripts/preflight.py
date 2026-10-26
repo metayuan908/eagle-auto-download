@@ -87,6 +87,8 @@ def validate_queue(config, rows, verify_files=True, include_imported=False, targ
             issue(record, 'stale_adapter', 'Landor 素材需按已核实的正文 CMS 内容块提取')
 
         if record.get('external_provider'):
+            if record.get('external_provider') == 'adobe-ccv' and mode != 'files':
+                issue(record, 'adobe_file_mode', 'Adobe CCV 当前只适配视频文件；请设置 external_video_mode: files')
             if mode not in ('files', 'bookmarks', 'both'):
                 issue(record, 'external_mode', '请按用户要求设置 external_video_mode：files、bookmarks 或 both')
             if record.get('media_type') == 'bookmark' and mode in ('files', 'both'):

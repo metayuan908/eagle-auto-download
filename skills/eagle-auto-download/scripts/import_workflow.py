@@ -90,7 +90,7 @@ def import_assets(config, execute=False, project_urls=None, retry_uncertain=Fals
                         if item.get('ext') != 'url' or item.get('url', '').rstrip('/') != record['asset_url'].rstrip('/'):
                             raise RuntimeError('已保存 Eagle ID 与书签来源不一致，停止恢复')
                     else:
-                        eagle.verify_file(item_id, record['sha256'])
+                        item = eagle.verify_file(item_id, record['sha256'])
                     matches.append(item)
                 if not matches:
                     if bookmark:
@@ -102,8 +102,8 @@ def import_assets(config, execute=False, project_urls=None, retry_uncertain=Fals
                                                              known_files[record['sha256']])
                         if not matches:
                             matches = eagle.find_matching_items(expected, 'collector-id:' + key)
-                            for item in matches:
-                                eagle.verify_file(item['id'], record['sha256'])
+                            matches = [eagle.verify_file(item['id'], record['sha256'])
+                                       for item in matches]
                 if len(matches) > 1:
                     raise RuntimeError('对账发现多个匹配条目，需明确保留的 Eagle ID')
                 if not matches and status in ledger.PROTECTED and not (
@@ -141,9 +141,7 @@ def import_assets(config, execute=False, project_urls=None, retry_uncertain=Fals
                         raise RuntimeError('提交已记录，尚未核实条目；保留 uncertain，下次先对账')
                     created = True
                 item = matches[0]
-                if not bookmark:
-                    item = eagle.verify_file(item['id'], record['sha256'])
-                else:
+                if bookmark:
                     item = eagle.info(item['id'])
                     if not item or item.get('ext') != 'url' or item.get('url', '').rstrip('/') != record['asset_url'].rstrip('/'):
                         raise RuntimeError('书签格式或来源不一致')
@@ -156,6 +154,10 @@ def import_assets(config, execute=False, project_urls=None, retry_uncertain=Fals
                     shared = not same_identity or (
                         bool(set(item.get('folders', [])) - {folder_id}) and
                         item.get('annotation', '') != expected['annotation'])
+                # Ordinary new files get one combined hash/metadata readback below.
+                # Verify content before attaching a shared or misplaced item.
+                if not bookmark and (shared or folder_id not in item.get('folders', [])):
+                    item = eagle.verify_file(item['id'], record['sha256'])
                 if folder_id not in item.get('folders', []):
                     eagle.post('/api/item/update', {'id': item['id'],
                                'folders': list(dict.fromkeys(item.get('folders', []) + [folder_id]))})
@@ -180,7 +182,7 @@ def import_assets(config, execute=False, project_urls=None, retry_uncertain=Fals
                     if bookmark:
                         eagle.post('/api/item/update', {'id': item['id'], 'name': expected['name'],
                                    'annotation': expected['annotation'], 'tags': expected['tags']})
-                    verify_accepted(eagle, record, item['id'], folder_id)
+                    verify_accepted(eagle, record, item['id'], folder_id, file_item=item)
                     if record.get('is_project_logo'):
                         eagle.set_cover(folder_id, item['id'], record['project_url'])
                         report['covers'] += 1

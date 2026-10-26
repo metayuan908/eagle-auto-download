@@ -178,7 +178,7 @@ class PreflightTests(unittest.TestCase):
         eagle = Eagle(self.config['eagle'])
         expected = {'name': 'Mathaf 博物馆 001', 'website': self.record['project_url'],
                     'annotation': '中文简介。', 'tags': ['文化', '博物馆']}
-        current = {'name': expected['name'], 'url': expected['website'],
+        current = {'id': 'id', 'name': expected['name'], 'url': expected['website'],
                    'annotation': expected['annotation'], 'tags': expected['tags'], 'folders': ['folder']}
         with patch.object(eagle, 'check_library'), patch.object(eagle, 'request', return_value=current):
             self.assertEqual(eagle.verify_item('id', expected, 'folder'), current)
@@ -192,7 +192,7 @@ class PreflightTests(unittest.TestCase):
         expected = {'name': 'The T*******s T***s: 项目 013/video',
                     'website': self.record['project_url'], 'annotation': '中文简介。',
                     'tags': ['文化']}
-        current = {'name': 'The Ts Ts 项目 013video', 'url': expected['website'],
+        current = {'id': 'id', 'name': 'The Ts Ts 项目 013video', 'url': expected['website'],
                    'annotation': expected['annotation'], 'tags': expected['tags'],
                    'folders': ['folder']}
         with patch.object(eagle, 'check_library'), patch.object(eagle, 'request', return_value=current):
@@ -218,7 +218,7 @@ class PreflightTests(unittest.TestCase):
         eagle = Eagle(self.config['eagle'])
         expected = {'name': 'Mathaf 博物馆 Vimeo 001', 'url': 'https://vimeo.com/123',
                     'annotation': '中文简介。', 'tags': ['文化']}
-        current = {**expected, 'ext': 'url', 'folders': ['folder']}
+        current = {**expected, 'id': 'id', 'ext': 'url', 'folders': ['folder']}
         def request(endpoint):
             return current if '/info?' in endpoint else str(self.directory / 'missing-preview.jpg')
         with patch.object(eagle, 'check_library'), patch.object(eagle, 'request', side_effect=request), \
@@ -230,7 +230,7 @@ class PreflightTests(unittest.TestCase):
         eagle = Eagle(self.config['eagle'])
         expected = {'name': 'Mathaf 博物馆 Vimeo 001', 'url': 'https://vimeo.com/123',
                     'annotation': '中文简介。', 'tags': ['文化']}
-        current = {**expected, 'ext': 'url', 'folders': ['folder']}
+        current = {**expected, 'id': 'id', 'ext': 'url', 'folders': ['folder']}
         thumbnail = self.directory / '预览 image.jpg'
         calls = {'thumb': 0, 'refresh': 0}
 

@@ -60,6 +60,12 @@ def load_config(path):
     fallback_after = config['collection'].get('download_failure_fallback_after', 3)
     if type(fallback_after) is not int or fallback_after < 1:
         raise ValueError('download_failure_fallback_after 必须是正整数')
+    proxy = config['collection'].get('external_video_proxy')
+    if proxy is not None and not isinstance(proxy, str):
+        raise ValueError('external_video_proxy 必须是字符串或 null')
+    retries = config['collection'].get('external_video_retries', 3)
+    if type(retries) is not int or not 1 <= retries <= 5:
+        raise ValueError('external_video_retries 必须是 1 到 5 的整数')
     return config
 
 
@@ -106,7 +112,7 @@ def prepare(config, manifest):
     sources = json.loads(manifest.read_text())
     if not isinstance(sources, list) or not sources:
         raise ValueError('素材清单必须是非空 JSON 数组')
-    report = {'prepared': 0, 'existing': 0, 'failed': [], 'assets': []}
+    report = {'prepared': 0, 'existing': 0, 'failed': [], 'assets': [], 'video_validation': {}}
     with state(config) as db:
         for index, source in enumerate(sources, 1):
             try:
@@ -128,7 +134,8 @@ def prepare(config, manifest):
                         'media_type': 'bookmark'}]
                 else:
                     local = (manifest.parent / source['local_path']).resolve(strict=True)
-                    outputs = (prepare_video(local) if source.get('media_type') == 'video' else
+                    outputs = (prepare_video(local, config['_paths']['downloads'] / 'video-validation',
+                                             metrics=report['video_validation']) if source.get('media_type') == 'video' else
                                prepare_image(local, config['_paths']['downloads'] / 'prepared',
                                              config['collection']['webp_to_jpeg']))
                 for output in outputs:
@@ -181,7 +188,12 @@ def site_url(config):
         'saffron': 'https://saffron-consultants.com/work',
         'twoxfour': 'https://2x4.org/filter/all/',
         'landor': 'https://landor.com/en/our-work/',
+        'tigerpan': 'https://www.tigerpan.com/works',
     }
+    if site.get('id') == 'behance':
+        from behance import profile_name
+        profile_name(site.get('list_url', ''))
+        return site['list_url'].rstrip('/')
     if site.get('id') not in supported or site.get('list_url', '').rstrip('/') != supported[site['id']].rstrip('/'):
         raise ValueError('站点地址与当前适配器不匹配')
     return site['list_url']
@@ -190,6 +202,19 @@ def site_url(config):
 def site_adapter(config):
     site_url(config)  # Validate both the identifier and the configured URL.
     return __import__(config['sites'][0]['id'])
+
+
+def discover_projects(config):
+    adapter = site_adapter(config)
+    url = site_url(config)
+    if hasattr(adapter, 'discover_projects'):
+        urls = adapter.discover_projects(url, config['collection'].get('request_delay_seconds', 1))
+    else:
+        urls = adapter.discover(adapter.fetch_html(url))
+    skipped = config['sites'][0].get('skip_project_urls', [])
+    if not isinstance(skipped, list) or any(not isinstance(u, str) for u in skipped):
+        raise ValueError('skip_project_urls 必须是已人工核对的项目 URL 列表')
+    return [url for url in urls if url.rstrip('/') not in {u.rstrip('/') for u in skipped}]
 
 
 def existing_project_urls(config, project_urls):
@@ -222,17 +247,18 @@ def existing_project_urls(config, project_urls):
         display = metadata.get(url, {}).get('display_name', '')
         display = display.encode('ascii', 'ignore').decode().strip()
         norm_display = ''.join(ch for ch in display.casefold() if ch.isalnum())
-        matched = (url.rstrip('/') in item_urls or
-                   any(name.startswith(norm_slug) or
-                       (norm_display and name.startswith(norm_display)) for name in names))
+        exact_sources_only = site['id'] in ('behance', 'tigerpan')
+        matched_name = not exact_sources_only and any(
+            (norm_slug and name.startswith(norm_slug)) or
+            (norm_display and name.startswith(norm_display)) for name in names)
+        matched = url.rstrip('/') in item_urls or matched_name
         if matched and statuses.get(url) not in ('failed', 'pending'):
             existing.add(url)
     return existing
 
 
 def scan(config, baseline=False):
-    adapter = site_adapter(config)
-    projects = adapter.discover(adapter.fetch_html(site_url(config)))
+    projects = discover_projects(config)
     with state(config) as db:
         initialized = db.execute("SELECT value FROM settings WHERE key='baseline_initialized'").fetchone() is not None
         if baseline:
@@ -258,12 +284,16 @@ def collect_project(config, url):
     collect_args = (url, config['_paths']['downloads'] / project_id,
                     config['collection']['request_delay_seconds'],
                     config.get('project_metadata', {}).get(url, {}))
-    if config['sites'][0]['id'] in ('twoxfour', 'landor'):
+    if config['sites'][0]['id'] == 'behance':
+        result = adapter.collect(*collect_args, profile_url=site_url(config),
+                                 studio=config['sites'][0]['studio'],
+                                 max_concurrent_downloads=config['collection'].get('max_concurrent_downloads', 2))
+    elif config['sites'][0]['id'] in ('twoxfour', 'landor', 'tigerpan'):
         result = adapter.collect(*collect_args,
                                  max_concurrent_downloads=config['collection'].get('max_concurrent_downloads', 2))
     else:
         result = adapter.collect(*collect_args)
-    if result['downloaded']:
+    if result.get('records', result['downloaded']):
         result['preparation'] = prepare(config, result['manifest'])
         result['failed'] += result['preparation']['failed']
     with state(config) as db:
@@ -325,11 +355,12 @@ def bookmark_payload(record, thumbnail=None):
     return payload
 
 
-def verify_accepted(eagle, record, item_id, folder_id):
+def verify_accepted(eagle, record, item_id, folder_id, file_item=None):
     bookmark = record.get('media_type') == 'bookmark'
     expected = bookmark_payload(record) if bookmark else payload(record)
     expected['annotation'] = record.get('project_summary') or ''
-    eagle.verify_item(item_id, expected, folder_id, bookmark=bookmark)
+    eagle.verify_item(item_id, expected, folder_id, bookmark=bookmark,
+                      digest=None if bookmark else record['sha256'], file_item=file_item)
 
 
 def import_assets(config, execute=False, project_urls=None, retry_uncertain=False, asset_ids=None):
@@ -411,8 +442,7 @@ def main():
         elif args.command == 'prepare':
             result = prepare(config, args.manifest)
         elif args.command == 'discover':
-            adapter = site_adapter(config)
-            result = {'projects': adapter.discover(adapter.fetch_html(site_url(config)))}
+            result = {'projects': discover_projects(config)}
         elif args.command in ('scan', 'baseline'):
             result = scan(config, baseline=args.command == 'baseline')
         elif args.command == 'run':
@@ -451,6 +481,11 @@ def main():
                 result = {'project_title': media[0]['project_title'],
                           'project_url': url, 'description_source': description(html),
                           'media': media}
+            elif config['sites'][0]['id'] == 'behance':
+                media = adapter.extract(html, url, owner=adapter.profile_name(site_url(config)),
+                                        studio=config['sites'][0]['studio'])
+                result = {'project_title': media[0]['project_title'], 'project_url': url,
+                          'description_source': media[0].get('source_description'), 'media': media}
             else:
                 media = adapter.extract(html, url)
                 result = {'project_title': media[0]['project_title'],

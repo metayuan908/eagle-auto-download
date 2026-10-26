@@ -140,6 +140,80 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(db.execute('SELECT count(*) FROM files').fetchone()[0], 1)
         self.assertEqual(sum(url.startswith('/api/item/list?') for url, _ in self.calls), 1)
 
+    def test_new_file_combines_final_content_and_metadata_readback(self):
+        self.enqueue()
+        result = self.run_import()
+        self.assertEqual(result['imported'], 1)
+        self.assertEqual(result['failed'], [])
+        # Poll visibility, then one fresh content + metadata verification.
+        self.assertEqual(sum(url.startswith('/api/item/info?') for url, _ in self.calls), 2)
+        self.assertLess(len(self.calls), 28)  # v1.6.0 required 28 requests for this case.
+
+    def test_combined_readback_rejects_changed_original_without_accepting_attempt(self):
+        self.enqueue()
+        original = self.dispatch
+        reads = 0
+        def dispatch(endpoint, data):
+            nonlocal reads
+            result = original(endpoint, data)
+            if endpoint.startswith('/api/item/info?'):
+                reads += 1
+                if reads == 1:
+                    file = self.library/'images'/(result['id']+'.info')/(result['name']+'.jpg')
+                    file.write_bytes(b'changed after submission')
+            return result
+        self.dispatch = dispatch
+        report = self.run_import()
+        self.assertEqual(report['imported'], 0)
+        self.assertEqual(len(report['failed']), 1)
+        self.assertIn('哈希', report['failed'][0]['error'])
+        with state(self.config) as db:
+            self.assertEqual(db.execute('SELECT status FROM assets').fetchone()[0], 'uncertain')
+
+    def test_combined_readback_checks_library_after_final_item_response(self):
+        self.enqueue()
+        original = self.dispatch
+        reads = 0
+        switched = False
+        def dispatch(endpoint, data):
+            nonlocal reads, switched
+            result = original(endpoint, data)
+            if endpoint.startswith('/api/item/info?'):
+                reads += 1
+                if reads == 2:
+                    switched = True
+            if endpoint == '/api/library/info' and switched:
+                return {'library': {'path': str(self.root/'other.library')}}
+            return result
+        self.dispatch = dispatch
+        report = self.run_import()
+        self.assertEqual(report['imported'], 0)
+        self.assertEqual(len(report['failed']), 1)
+        self.assertIn('库不一致', report['failed'][0]['error'])
+        self.assertEqual(len(self.creates()), 1)
+
+    def test_combined_readback_refreshes_metadata_after_hashing(self):
+        self.enqueue()
+        def changed(path):
+            value = sha256(path)
+            for item in self.store.values():
+                item['annotation'] = 'changed during hash verification'
+            return value
+        with patch('eagle.sha256', side_effect=changed):
+            report = self.run_import()
+        self.assertEqual(report['imported'], 0)
+        self.assertEqual(len(report['failed']), 1)
+        self.assertIn('回读验收失败', report['failed'][0]['error'])
+
+    def test_combined_readback_rejects_wrong_returned_identity(self):
+        item = self.seed(name='Target 目标项目 001 original', url=self.record['project_url'])
+        expected = payload(self.record)
+        client = self.client(self.config['eagle'])
+        with patch.object(client, 'request', return_value={**item, 'id': 'other'}), \
+             patch.object(client, 'check_library'):
+            with self.assertRaisesRegex(RuntimeError, '其他条目'):
+                client.verify_item('existing', expected, 'old-folder', digest=self.record['sha256'])
+
     def test_legacy_success_only_response_still_reconciles(self):
         self.response_mode = 'legacy'
         self.enqueue()

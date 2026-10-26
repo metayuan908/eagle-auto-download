@@ -303,7 +303,8 @@ class PipelineTests(unittest.TestCase):
             def request(self, endpoint): return {'annotation': ''}
             def post(self, endpoint, payload):
                 if endpoint == '/api/item/addFromPaths': FakeEagle.posts += 1
-            def await_item(self, *args, **kwargs): return [{'id': 'created'}]
+            def await_item(self, *args, **kwargs):
+                return [{**expected, 'id': 'created', 'url': expected['website'], 'folders': ['folder']}]
             def verify_item(self, *args, **kwargs): return {}
 
         with patch('collector.Eagle', FakeEagle):

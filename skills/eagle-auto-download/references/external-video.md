@@ -1,5 +1,7 @@
 # Vimeo 外链视频下载
 
+同一个 scripts/external_video.py 现也消费 Adobe CCV 待下载记录；其来源解析、files 模式与网络参数见 [Behance / Adobe 流程](project-media.md)。下文的下载按钮权限、oEmbed 海报与书签回退规则只适用于 Vimeo。
+
 用户要求视频文件时，运行 `scripts/external_video.py`。它消费状态库中的 Vimeo 书签，自动查找官方允许下载的文件；书签和视频文件分别记录。默认优先走官方公开视频页的下载按钮流程，再考虑 yt-dlp 播放器提取。
 
 导入模式及验收字段见 [导入验收](acceptance.md)。用户要文件时配置 `collection.external_video_mode: files`（若同时要书签则为 `both`），不能用仅 URL 条目代替视频文件。外链下载器的暂停与 Eagle 导入的 `pause-import` 分别保留；优化 Skill 或完成离线检查不会自动解除任一暂停。

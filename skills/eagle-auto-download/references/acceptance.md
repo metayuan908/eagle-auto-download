@@ -6,7 +6,7 @@
 
 ```json
 {
-  "https://2x4.org/work/mathaf-arab-museum-of-modern-art": {
+  "https://example.com/work/project": {
     "display_name": "Mathaf 阿拉伯现代艺术博物馆",
     "category_tags": ["文化"],
     "industry_tags": ["博物馆", "艺术机构"],
@@ -18,13 +18,15 @@
 }
 ```
 
-`media_scope_reviewed` 表示已检查当前案例的素材边界，不是默认值。2x4 新采集记录会保存 `source_description`、`adapter_revision: 2x4-main-v2`；原文由适配器保留，不被配置中的空值覆盖。其他适配器可用 `description_source` 保存检查过的原文。`prepare` 将配置中的审核字段登记到本地队列；它不会自动翻译或把未知状态标成审核完成。
+`media_scope_reviewed` 表示已检查当前案例的素材边界，不是默认值。文章归档型 新采集记录会保存 `source_description`、当前 `adapter_revision` 标记；原文由适配器保留，不被配置中的空值覆盖。其他适配器可用 `description_source` 保存检查过的原文。`prepare` 将配置中的审核字段登记到本地队列；它不会自动翻译或把未知状态标成审核完成。
 
 原站无介绍时，核实后用 `description_status: absent`，不填写原文与简介。有原文却无中文简介时必须继续整理，不能当成“没有介绍”。中文简介允许保留品牌专名；不得夹带英文原文整段、来源链接、下载记录或采集标记。
 
 名称要简短且含中文和英文；同客户不同案例保留区别，例如 `Miu Miu Jazz Club 缪缪爵士俱乐部`。名称超过 80 字符需缩短。标签采用行业大类加具体关键词，不用工作室名、客户名、品牌参考或视频等媒体类型代替行业标签。确实无法判断大类时保留空数组并记录 `category_status: unknown`，不得凑标签。
 
 Vimeo 模式在 `collection.external_video_mode` 中明确选择：
+
+Adobe CCV 当前只适配 files；正文中暂存的外链记录表示待下载视频，不能直接导入为书签或计为文件完成。具体命令见 [专用流程](project-media.md)。
 
 | 用户要求 | 配置 | 验收内容 |
 | --- | --- | --- |
@@ -57,7 +59,7 @@ python3 <skill-dir>/scripts/collector.py --config <config> preflight --include-i
 
 暂停命令写入与状态库同目录的 `.import-paused` 标记，不等待长任务持有的数据库锁。当前已发出的请求可能完成；必须确认旧进程退出或 `.operation.lock` 已释放才报告已暂停。执行器在每条提交前和每次 Eagle 写入前检查标记。用户明确要求继续导入后，运行 `resume-import` 解除标记，它先核实操作锁可用且不会自动启动导入。
 
-`preflight --include-imported` 审计历史记录，输出 `reports/preflight-all.json`，不改 Eagle。旧队列缺少审核字段会被拦截；先检查原页并补齐证据，不批量填 `true` 或 `absent`。旧版 2x4 的相关推荐视频可能被归入当前项目，需用修正后的适配器重新提取清单，按 URL/哈希对比，明确列出受影响条目。
+`preflight --include-imported` 审计历史记录，输出 `reports/preflight-all.json`，不改 Eagle。旧队列缺少审核字段会被拦截；先检查原页并补齐证据，不批量填 `true` 或 `absent`。旧版 文章归档型 的相关推荐视频可能被归入当前项目，需用修正后的适配器重新提取清单，按 URL/哈希对比，明确列出受影响条目。
 
 已提交、复用、元数据待审核或 `uncertain` 记录保留原来的名称、顺序和 Eagle ID 用于对账。重新 `prepare` 不能覆盖这些记录的命名、标签、简介或归属信息；需要变更时先用 SQLite backup 保存状态、用 API 读取旧项目与素材映射，再根据现有授权制定迁移操作，修改后逐项回读。不要删除素材、直接修改 Eagle 库内部文件，或为修复元数据重复导入。暂停期间仅优化 Skill 和离线测试，不以验证为由解除暂停。
 

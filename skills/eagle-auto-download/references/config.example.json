@@ -27,6 +27,8 @@
   },
   "collection": {
     "external_video_mode": null,
+    "external_video_proxy": null,
+    "external_video_retries": 3,
     "download_failure_fallback": null,
     "download_failure_fallback_after": 3,
     "highest_available_quality": true,

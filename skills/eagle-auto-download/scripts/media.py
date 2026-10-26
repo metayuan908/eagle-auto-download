@@ -1,21 +1,72 @@
 """Validated, atomic media preparation. Originals are never overwritten."""
 import hashlib
 import io
+import json
+import math
 import os
 import re
 import subprocess
 import tempfile
+import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from PIL import Image, ImageCms, ImageColor, ImageOps
 
 
-def prepare_video(source):
+VIDEO_VALIDATOR_REVISION = 1
+
+
+def prepare_video(source, cache_directory=None, metrics=None):
+    """Reuse full-decode results only after hashing the current input bytes."""
+    started = time.monotonic()
+    metrics = metrics if metrics is not None else {}
+    try:
+        return _prepare_video(source, cache_directory, metrics)
+    finally:
+        metrics['seconds'] = metrics.get('seconds', 0.0) + time.monotonic() - started
+
+
+def _prepare_video(source, cache_directory, metrics):
     from imageio_ffmpeg import get_ffmpeg_exe
     source = Path(source).resolve(strict=True)
+    executable = Path(get_ffmpeg_exe()).resolve(strict=True)
+    stat = source.stat()
+    def unchanged():
+        after = source.stat()
+        return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns) == (
+            after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+    digest = sha256(source)
+    if not unchanged():
+        raise ValueError('视频在校验时发生变化')
+    binary = executable.stat()
+    validator = {'revision': VIDEO_VALIDATOR_REVISION, 'decoder': str(executable),
+                 'decoder_bytes': binary.st_size, 'decoder_mtime_ns': binary.st_mtime_ns}
+    receipt = None
+    metadata = None
+    if cache_directory is not None:
+        signature = hashlib.sha256(json.dumps(validator, sort_keys=True).encode()).hexdigest()[:16]
+        receipt = Path(cache_directory) / (digest + '-' + signature + '.json')
+        try:
+            saved = json.loads(receipt.read_text())
+            candidate = saved['metadata']
+            if (saved['validator'] == validator and saved['sha256'] == digest and
+                    saved['bytes'] == stat.st_size and
+                    all(type(candidate[k]) is int and candidate[k] > 0 for k in ('width', 'height')) and
+                    type(candidate['has_audio']) is bool and
+                    type(candidate['duration_seconds']) in (int, float) and
+                    math.isfinite(candidate['duration_seconds']) and candidate['duration_seconds'] > 0):
+                metadata = {k: candidate[k] for k in ('width', 'height', 'duration_seconds', 'has_audio')}
+        except (OSError, ValueError, KeyError, TypeError, OverflowError):
+            pass  # Old, corrupt or incomplete receipts require a fresh full decode.
+    if metadata is not None:
+        if not unchanged():
+            raise ValueError('视频在校验时发生变化')
+        metrics['cache_hits'] = metrics.get('cache_hits', 0) + 1
+        return _video_record(source, digest, metadata)
+    metrics['full_decodes'] = metrics.get('full_decodes', 0) + 1
     # Decode the original streams without writing or transcoding the input.
-    result = subprocess.run([get_ffmpeg_exe(), '-nostdin', '-hide_banner', '-xerror',
+    result = subprocess.run([str(executable), '-nostdin', '-hide_banner', '-xerror',
                              '-i', str(source), '-map', '0:v:0', '-map', '0:a?',
                              '-f', 'null', '-'], capture_output=True, text=True, timeout=180)
     if result.returncode:
@@ -25,12 +76,21 @@ def prepare_video(source):
     if not video or not duration:
         raise ValueError('无法核实视频尺寸或时长')
     seconds = int(duration[1]) * 3600 + int(duration[2]) * 60 + float(duration[3])
-    digest = sha256(source)
+    if not unchanged() or sha256(source) != digest or not unchanged():
+        raise ValueError('视频在完整解码时发生变化')
+    metadata = {'width': int(video[1]), 'height': int(video[2]),
+                'duration_seconds': seconds, 'has_audio': 'Audio:' in result.stderr}
+    if receipt is not None:
+        atomic_write(receipt, json.dumps({'validator': validator, 'sha256': digest,
+                     'bytes': stat.st_size, 'metadata': metadata}).encode())
+    return _video_record(source, digest, metadata)
+
+
+def _video_record(source, digest, metadata):
     return [{'source_path': str(source), 'source_sha256': digest,
              'source_format': 'video', 'local_path': str(source), 'sha256': digest,
              'role': 'video', 'conversion': None, 'frames': None,
-             'width': int(video[1]), 'height': int(video[2]),
-             'duration_seconds': seconds, 'has_audio': 'Audio:' in result.stderr}]
+             **metadata}]
 
 
 def sha256(path):
