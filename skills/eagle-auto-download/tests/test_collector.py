@@ -115,23 +115,26 @@ class PipelineTests(unittest.TestCase):
             def folder(self, names): return 'project-folder'
             def ensure_folder_description(self, *args): pass
             def info(self, item_id): return next(x for x in self.items if x['id'] == item_id)
-            def find_bookmarks(self, url, folder_id=None):
-                return [x for x in self.items if x['url'] == url and (not folder_id or folder_id in x['folders'])]
-            def await_bookmark(self, url, folder_id, **kwargs): return self.find_bookmarks(url, folder_id)
+            def find_vimeo_bookmarks(self, url):
+                return [x for x in self.items if x['url'] == url and x.get('medium') == 'vimeo']
+            def save_vimeo_bookmark(self, url, name, cache_dir):
+                self.posts.append(('save-url', {'url': url, 'name': name}))
+                self.items.append({'url': url, 'name': name, 'id': 'bookmark',
+                                   'ext': 'url', 'medium': 'vimeo', 'videoID': '12345678', 'folders': []})
+            def attach_vimeo_bookmark(self, item_id, folder_id):
+                self.info(item_id)['folders'].append(folder_id)
             def post(self, endpoint, payload):
                 self.posts.append((endpoint, payload))
-                if endpoint == '/api/item/addBookmark':
-                    self.items.append({**payload, 'id': 'bookmark', 'ext': 'url', 'folders': [payload['folderId']]})
             def request(self, endpoint): return {'annotation': ''}
             def verify_item(self, *args, **kwargs): return {}
-        with patch('collector.Eagle', FakeEagle), patch('saffron.vimeo_thumbnail', return_value='dGh1bWI='):
+        with patch('collector.Eagle', FakeEagle):
             result = import_assets(self.config, True)
         self.assertEqual(result['imported'], 1)
         endpoint, payload = FakeEagle.posts[0]
-        self.assertEqual(endpoint, '/api/item/addBookmark')
+        self.assertEqual(endpoint, 'save-url')
         self.assertEqual(payload['url'], 'https://vimeo.com/12345678')
         self.assertEqual(payload['name'], 'Blue Car Rental 冰岛租车 Vimeo 001')
-        self.assertEqual(payload['base64'], 'dGh1bWI=')
+        self.assertEqual(FakeEagle.items[0]['folders'], ['project-folder'])
 
     def test_industry_tags_bilingual_name_and_optional_summary(self):
         _, manifest = self.manifest()

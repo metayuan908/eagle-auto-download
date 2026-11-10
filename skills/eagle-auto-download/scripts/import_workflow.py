@@ -87,14 +87,16 @@ def import_assets(config, execute=False, project_urls=None, retry_uncertain=Fals
                     if not item:
                         continue
                     if bookmark:
-                        if item.get('ext') != 'url' or item.get('url', '').rstrip('/') != record['asset_url'].rstrip('/'):
+                        if not EagleAPI.is_vimeo_bookmark(item, record['asset_url']):
+                            if item.get('ext') == 'url' and item.get('url', '').rstrip('/') == record['asset_url'].rstrip('/'):
+                                continue  # Legacy cover-only link is not a video preview.
                             raise RuntimeError('已保存 Eagle ID 与书签来源不一致，停止恢复')
                     else:
                         item = eagle.verify_file(item_id, record['sha256'])
                     matches.append(item)
                 if not matches:
                     if bookmark:
-                        matches = eagle.find_bookmarks(record['asset_url'])
+                        matches = eagle.find_vimeo_bookmarks(record['asset_url'])
                     else:
                         if sha256(record['local_path']) != record['sha256']:
                             raise RuntimeError('待导入文件已变化，请重新准备')
@@ -117,20 +119,23 @@ def import_assets(config, execute=False, project_urls=None, retry_uncertain=Fals
                 eagle.ensure_folder_description(folder_id, record.get('project_summary') or '')
                 created = False
                 if not matches:
-                    thumbnail = None
-                    if bookmark:
-                        from saffron import vimeo_thumbnail
-                        thumbnail = vimeo_thumbnail(record['asset_url'], config['_paths']['downloads'] / 'vimeo-thumbnails')
                     attempt_id = ledger.begin_attempt(db, key, library, retry=status == 'uncertain')
-                    endpoint = '/api/item/addBookmark' if bookmark else '/api/item/addFromPaths'
-                    request = ({**bookmark_payload(record, thumbnail), 'folderId': folder_id} if bookmark else
-                               {'items': [payload(record)], 'folderId': folder_id})
-                    response = eagle.post(endpoint, request)
-                    returned_ids = EagleAPI.response_ids(response)
-                    ledger.finish_attempt(db, attempt_id, 'response_received', returned_ids)
                     if bookmark:
-                        matches = eagle.await_bookmark(record['asset_url'], folder_id, item_ids=returned_ids)
+                        eagle.save_vimeo_bookmark(record['asset_url'], expected['name'],
+                                                  config['_paths']['downloads'] / 'vimeo-thumbnails')
+                        deadline = time.monotonic() + 15
+                        while time.monotonic() < deadline:
+                            matches = eagle.find_vimeo_bookmarks(record['asset_url'])
+                            if matches:
+                                break
+                            time.sleep(0.5)
+                        returned_ids = [item['id'] for item in matches]
                     else:
+                        response = eagle.post('/api/item/addFromPaths',
+                                              {'items': [payload(record)], 'folderId': folder_id})
+                        returned_ids = EagleAPI.response_ids(response)
+                    ledger.finish_attempt(db, attempt_id, 'response_received', returned_ids)
+                    if not bookmark:
                         matches = eagle.await_item(expected, 'collector-id:' + key,
                                                    folder_id=folder_id, item_ids=returned_ids)
                         if not matches:
@@ -143,7 +148,7 @@ def import_assets(config, execute=False, project_urls=None, retry_uncertain=Fals
                 item = matches[0]
                 if bookmark:
                     item = eagle.info(item['id'])
-                    if not item or item.get('ext') != 'url' or item.get('url', '').rstrip('/') != record['asset_url'].rstrip('/'):
+                    if not EagleAPI.is_vimeo_bookmark(item, record['asset_url']):
                         raise RuntimeError('书签格式或来源不一致')
                 same_identity = (normalized_eagle_name(item.get('name', '')) ==
                                  normalized_eagle_name(expected['name']) and
@@ -159,8 +164,11 @@ def import_assets(config, execute=False, project_urls=None, retry_uncertain=Fals
                 if not bookmark and (shared or folder_id not in item.get('folders', [])):
                     item = eagle.verify_file(item['id'], record['sha256'])
                 if folder_id not in item.get('folders', []):
-                    eagle.post('/api/item/update', {'id': item['id'],
-                               'folders': list(dict.fromkeys(item.get('folders', []) + [folder_id]))})
+                    if bookmark:
+                        eagle.attach_vimeo_bookmark(item['id'], folder_id)
+                    else:
+                        eagle.post('/api/item/update', {'id': item['id'],
+                                   'folders': list(dict.fromkeys(item.get('folders', []) + [folder_id]))})
                 if shared:
                     current = eagle.info(item['id'])
                     if not current or folder_id not in current.get('folders', []):

@@ -57,6 +57,6 @@ HTTP 200 既可能是验证页，也可能是含新站数据的正常 HTML，必
 
 Vimeo 官方说明，观众下载须由作者开启；公开视频原始源文件要求登录，匿名观众可下载官方提供的转码版本。Vimeo 网页没有内置批量下载功能；此脚本逐条调用每个获准视频的官方下载流程。[下载说明](https://help.vimeo.com/hc/en-us/articles/12426502581265-How-to-download-a-video-on-Vimeo)、[源文件与转码版本](https://help.vimeo.com/hc/en-us/articles/25080921162001-Troubleshooting-Source-file-unavailable-to-download)。YouTube 按用户要求暂缓，不声称已支持。
 
-书签通过公开 oEmbed 海报建立预览，按项目文件夹与 URL 核实。`uncertain` 条目只对账；海报请求在提交 Eagle 前完成，不能把书签导入成功算作视频下载成功。
+Vimeo 书签使用 Eagle for Safari 的本机扩展保存协议（41593、save-url），写入 medium=vimeo 和 videoID，并提供公开 oEmbed 封面。当前后台实现读取本机 Safari 扩展的版本，并要求 Eagle 官方 MCP 插件开启 item_add_to_folders（41596），用于关联目标项目。验收核对 Vimeo 类型、视频 ID、项目归属和封面解码；实际播放受 Vimeo 的访问权限与网络影响。普通书签缺少 Vimeo 类型和 ID，不能算作已验收的视频预览。已有普通书签和历史队列保留，已验收记录不自动迁移。`uncertain` 条目只对账；海报请求在提交 Eagle 前完成，不能把书签导入成功算作视频下载成功。
 
 重新检查已有回退视频时，显式运行 `external_video.py --config <config> --recheck-fallbacks plan`，用户要求重新尝试文件后再将 plan 改为 download。该选项仅作用于本次命令，不删除原链接、不修改作者下载权限。已有视频记录的恢复仍按其本地文件和队列验收，不重复下载。若获取到文件，其验收完成后记录书签的替代关系；下载完成本身不能算入库完成。

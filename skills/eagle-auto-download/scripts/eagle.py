@@ -243,6 +243,64 @@ class Eagle:
                 item.get('url', '').rstrip('/') == url.rstrip('/') and
                 (not folder_id or folder_id in item.get('folders', []))]
 
+    @staticmethod
+    def is_vimeo_bookmark(item, url):
+        if not item or item.get('isDeleted') or item.get('ext') != 'url':
+            return False
+        source = urlsplit(item.get('url') or '')
+        target = urlsplit(url)
+        video_id = target.path.strip('/')
+        return (target.hostname == 'vimeo.com' and video_id.isdecimal() and
+                source.hostname in ('vimeo.com', 'www.vimeo.com') and
+                source.path.strip('/') == video_id and item.get('medium') == 'vimeo' and
+                str(item.get('videoID')) == video_id)
+
+    def find_vimeo_bookmarks(self, url):
+        return [item for item in self.iter_items() if self.is_vimeo_bookmark(item, url)]
+
+    def save_vimeo_bookmark(self, url, name, cache_dir):
+        from saffron import vimeo_thumbnail
+        from eagle_plugin import Plugin
+        from PIL import Image
+
+        plugin = Plugin()
+        if 'item_add_to_folders' not in plugin.tools():
+            raise RuntimeError('Eagle 官方插件未启用目录关联工具')
+        video_id = urlsplit(url).path.strip('/')
+        poster = vimeo_thumbnail(url, cache_dir)
+        with Image.open(Path(cache_dir) / (video_id + '.jpg')) as image:
+            image.load()
+            width, height = image.size
+        manifest = next(Path('/Applications/Eagle for Safari.app/Contents/PlugIns').glob(
+            '*.appex/Contents/Resources/manifest.json'), None)
+        if manifest is None:
+            raise RuntimeError('找不到 Eagle for Safari 扩展，无法确认保存协议版本')
+        version = json.loads(manifest.read_text())['version']
+        data = urlencode(dict(type='save-url', behavior='save-url', version=version,
+                              title=name, url=url, medium='vimeo', videoID=video_id,
+                              videoWidth=width, videoHeight=height, width=width, height=height,
+                              base64='data:image/jpeg;base64,' + poster)).encode()
+        if getattr(self, 'write_guard', None) and not self.write_guard():
+            raise RuntimeError('导入已暂停')
+        self.check_library()
+        request = Request('http://127.0.0.1:41593/', data=data,
+                          headers={'Content-Type': 'application/x-www-form-urlencoded'})
+        with plugin.opener.open(request, timeout=20) as response:
+            response.read(65536)
+
+    def attach_vimeo_bookmark(self, item_id, folder_id):
+        from eagle_plugin import Plugin, checked_result
+        if getattr(self, 'write_guard', None) and not self.write_guard():
+            raise RuntimeError('导入已暂停')
+        self.check_library()
+        checked_result(Plugin().request('/api/tools/call', {
+            'tool': 'item_add_to_folders',
+            'params': {'ids': [item_id], 'folders': [folder_id]},
+        }))
+        self.check_library()
+        if folder_id not in self.info(item_id).get('folders', []):
+            raise RuntimeError('Vimeo 条目的目录关联尚未核实')
+
     def folder(self, names):
         self.check_library()
         if self._folders is None:
