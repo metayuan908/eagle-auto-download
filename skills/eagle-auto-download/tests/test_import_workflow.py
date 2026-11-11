@@ -102,7 +102,7 @@ class WorkflowTests(unittest.TestCase):
                     update(row.get('children', []))
             update(self.folders)
             return None
-        if url.path == '/api/item/update':
+        if url.path in ('/api/item/update', '/api/v2/item/update'):
             self.store[data['id']].update({k: copy.deepcopy(v) for k, v in data.items() if k != 'id'})
             return None
         if url.path == '/api/item/addFromPaths':
@@ -127,6 +127,28 @@ class WorkflowTests(unittest.TestCase):
 
     def creates(self):
         return [row for row in self.calls if row[0] == '/api/item/addFromPaths']
+
+    def test_completed_project_releases_downloads_but_keeps_shared_pending_source(self):
+        downloads = self.config['_paths']['downloads'].resolve()
+        downloads.mkdir()
+        prepared = downloads / 'prepared.jpg'
+        shared = downloads / 'original.webp'
+        manifest = downloads / 'manifest.json'
+        shutil.copyfile(self.file, prepared)
+        Image.new('RGB', (18, 20), 'red').save(shared)
+        manifest.write_text('[]')
+        self.enqueue(record={**self.record, 'local_path': str(prepared),
+                             'source_path': str(shared), 'source_sha256': sha256(shared)})
+        self.enqueue('other', {**self.record, 'project_url': 'https://studio.example/other',
+                               'project_display_name': 'Other 另一项目',
+                               'local_path': str(shared), 'sha256': sha256(shared)})
+        result = self.run_import(project_urls=[self.record['project_url']])
+        self.assertEqual(result['cleanup'], {'removed': [str(prepared)], 'failed': []})
+        self.assertTrue(shared.is_file())
+        self.assertTrue(manifest.is_file())
+        self.assertTrue(self.file.is_file())
+        self.assertTrue(self.run_import()['summary']['complete'])
+        self.assertFalse(shared.exists())
 
     def test_returned_id_is_persisted_and_metadata_and_bytes_are_verified(self):
         self.enqueue()

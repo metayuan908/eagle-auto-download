@@ -2,11 +2,63 @@
 import json
 import time
 from collections import defaultdict
+from pathlib import Path
 
 import ledger
 from eagle import Eagle as EagleAPI, normalized_eagle_name
 from media import sha256
 from preflight import external_mode, pause_path, selected, validate_project_scope, validate_queue
+
+
+def cleanup_downloads(config, db, rows, library, projects, touched_projects):
+    """Remove verified project media only when every reference can release it."""
+    report = {'removed': [], 'failed': []}
+    downloads = config['_paths']['downloads'].resolve()
+    library_path = Path(library)
+    incomplete = {url.rstrip('/') for url, in db.execute(
+        "SELECT url FROM projects WHERE status IN ('failed','pending')")}
+    verified = set(db.execute(
+        'SELECT asset_id,status,eagle_id,sha256 FROM project_links WHERE library=? '
+        'AND verified_at IS NOT NULL', (library,)))
+    candidates = defaultdict(set)
+    retained = set()
+    for key, record, status, eagle_id in rows:
+        project = record['project_url'].rstrip('/')
+        eligible = (projects[project]['complete'] and project not in incomplete and
+                    status in ledger.ACCEPTED and eagle_id and
+                    (key, status, eagle_id, record.get('sha256')) in verified)
+        for path_key, digest_key in (('local_path', 'sha256'), ('source_path', 'source_sha256')):
+            if not record.get(path_key):
+                continue
+            path = Path(record[path_key])
+            try:
+                resolved = path.resolve()
+            except (OSError, RuntimeError) as exc:
+                report['failed'].append({'path': str(path), 'error': str(exc)})
+                continue
+            if not resolved.is_relative_to(downloads) or resolved.is_relative_to(library_path):
+                continue
+            if not eligible or path != resolved:
+                retained.add(resolved)
+            elif project in touched_projects:
+                candidates[resolved].add(record.get(digest_key))
+    for path, digests in candidates.items():
+        if pause_path(config).exists():
+            break
+        if path in retained:
+            continue
+        try:
+            if path.resolve() != path:
+                raise ValueError('下载路径已变化，保留文件')
+            if not path.exists():
+                continue
+            if not path.is_file() or len(digests) != 1 or sha256(path) not in digests:
+                raise ValueError('下载文件与队列记录不一致，保留文件')
+            path.unlink()
+            report['removed'].append(str(path))
+        except (OSError, RuntimeError, ValueError) as exc:
+            report['failed'].append({'path': str(path), 'error': str(exc)})
+    return report
 
 
 def import_assets(config, execute=False, project_urls=None, retry_uncertain=False, asset_ids=None):
@@ -64,6 +116,7 @@ def import_assets(config, execute=False, project_urls=None, retry_uncertain=Fals
         db.execute("INSERT OR IGNORE INTO settings(key,value) VALUES ('eagle_library',?)", (library,))
         db.commit()
         policy = config['collection'].get('shared_metadata_policy', 'review')
+        verified_projects = set()
         for digest, item_id in db.execute('SELECT sha256,eagle_id FROM files WHERE library=?', (library,)):
             known_files[digest].add(item_id)
         for key, record, status, old_id in queue:
@@ -200,6 +253,8 @@ def import_assets(config, execute=False, project_urls=None, retry_uncertain=Fals
                     known_files[record['sha256']].add(item['id'])
                 ledger.finish_attempt(db, attempt_id, 'needs_metadata_review' if shared and
                                       policy == 'review' else 'accepted', [item['id']])
+                if not shared or policy == 'preserve_existing':
+                    verified_projects.add(record['project_url'].rstrip('/'))
             except Exception as exc:
                 db.execute('UPDATE assets SET error=? WHERE id=?', (str(exc), key))
                 db.commit()
@@ -222,6 +277,9 @@ def import_assets(config, execute=False, project_urls=None, retry_uncertain=Fals
                        "status='represented_by_video',replaced_by_asset_id=excluded.replaced_by_asset_id",
                        (key, record['project_url'], replacement))
         db.commit()
+        if verified_projects and not pause_path(config).exists():
+            report['cleanup'] = cleanup_downloads(
+                config, db, current, library, report['summary']['projects'], verified_projects)
         report['elapsed_seconds'] = round(time.monotonic() - started, 3)
         report['api_metrics'] = getattr(eagle, 'metrics', {})
     return report

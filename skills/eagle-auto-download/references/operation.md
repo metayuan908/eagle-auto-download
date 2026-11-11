@@ -33,6 +33,8 @@ python3 <skill-dir>/scripts/collector.py --config <work-dir>/config.local.json i
 
 配置中 `paths` 的相对路径以配置文件父目录的父目录为基准。`root_folder: null` 时，工作室文件夹位于库顶层，项目文件夹位于工作室之下。状态数据库与下载目录应保持在用户指定的工作目录中，以便失败后续跑和对账。
 
+`import --execute` 与 `run --execute` 收尾时清理本次验收完成案例的已登记下载原件和转换件。`cleanup.removed` 列出已删除文件，`cleanup.failed` 列出清理异常。历史案例的本地文件审计仍会检查文件是否存在，已清理的路径可在导入报告中核对。
+
 若用户明确选择下载失败后保留 Vimeo 链接，可设 `collection.download_failure_fallback: "bookmarks"`，并将 `download_failure_fallback_after` 设为允许的独立尝试次数。默认模板关闭此选项。作者明确关闭下载时不必等待重试；其他逐条失败达到次数后才回退。下载器会在素材记录上保留回退原因，`files` 模式只选择这些明确标记的书签。
 
 所有适配器的 `project_metadata` 都以项目 URL 为键，包含 `display_name`、`category_tags`、`industry_tags` 和可选 `summary`。项目名使用简短中英文组合（如 `LEGO 乐高`）；标签结合适用大类与具体行业关键词；只根据页面实际提供的介绍填写中文简介。素材注释仅放中文项目简介，来源和处理信息留在本地状态库与报告。
