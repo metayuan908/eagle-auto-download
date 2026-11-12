@@ -88,9 +88,48 @@ class Eagle:
         return []
 
     def iter_items(self, filters=None):
-        """Detect page-index versus item-offset APIs; never silently skip page two."""
+        """Read the complete inventory and preserve V1 folder-filter compatibility."""
         self.check_library()
         filters = dict(filters or {})
+        if not filters:
+            # V2 exposes the full result count and uses item offsets.
+            # Keep V1 for folder reads
+            # because this live build currently ignores V2 folder filters.
+            offset = 0
+            seen = set()
+            expected_total = None
+            while True:
+                result = self.request('/api/v2/item/get?' + urlencode({'limit': 200, 'offset': offset}))
+                if (not isinstance(result, dict) or not isinstance(result.get('data'), list)
+                        or type(result.get('total')) is not int or result['total'] < 0):
+                    raise RuntimeError('Eagle v2 全库对账结果格式异常')
+                rows = result['data']
+                total = result.get('total')
+                if expected_total is None:
+                    expected_total = total
+                elif total != expected_total:
+                    raise RuntimeError('Eagle 全库数量在分页期间发生变化')
+                page_items = {}
+                for item in rows:
+                    item_id = item.get('id')
+                    if not item_id or item_id in seen:
+                        raise RuntimeError('Eagle v2 全库分页出现重叠或缺少 ID')
+                    previous = page_items.get(item_id)
+                    # Eagle can list a reused item twice with different thumbnail metadata.
+                    if previous and any(previous.get(key) != item.get(key)
+                                        for key in ('name', 'ext', 'size', 'url', 'isDeleted')):
+                        raise RuntimeError('Eagle v2 返回的同一素材 ID 身份不一致')
+                    page_items[item_id] = item
+                seen.update(page_items)
+                yield from page_items.values()
+                offset += len(rows)
+                if offset >= expected_total or not rows:
+                    break
+            if offset != expected_total:
+                raise RuntimeError(f'Eagle v2 全库对账不完整：读取 {offset} / {expected_total}')
+            self.check_library()
+            return
+
         def page(offset):
             rows = self.request('/api/item/list?' + urlencode(
                 {**filters, 'limit': 200, 'offset': offset, 'orderBy': 'CREATEDATE'}))
@@ -239,10 +278,40 @@ class Eagle:
         return matches
 
     def find_bookmarks(self, url, folder_id=None):
-        return [item for item in self.iter_items({'folders': folder_id} if folder_id else {})
+        return [item for item in self.items_by_url(url)
                 if not item.get('isDeleted') and item.get('ext') == 'url' and
                 item.get('url', '').rstrip('/') == url.rstrip('/') and
                 (not folder_id or folder_id in item.get('folders', []))]
+
+    def items_by_url(self, url):
+        """Use Eagle v2's exact URL filter instead of scanning a large V1 library."""
+        offset = 0
+        limit = 500
+        found = []
+        seen = set()
+        while True:
+            query = urlencode({'url': url, 'offset': offset, 'limit': limit})
+            result = self.request('/api/v2/item/get?' + query)
+            if isinstance(result, dict):
+                rows = result.get('data')
+                total = result.get('total')
+            elif isinstance(result, list):
+                rows, total = result, None
+            else:
+                raise RuntimeError('Eagle v2 URL 查询结果格式异常')
+            if not isinstance(rows, list):
+                raise RuntimeError('Eagle v2 URL 查询缺少条目列表')
+            ids = [item.get('id') for item in rows]
+            if any(not item_id for item_id in ids) or len(ids) != len(set(ids)) or seen.intersection(ids):
+                raise RuntimeError('Eagle v2 URL 查询分页出现重复或缺少 ID')
+            seen.update(ids)
+            found.extend(rows)
+            if total is not None and len(found) >= total:
+                break
+            if len(rows) < limit:
+                break
+            offset += len(rows)
+        return found
 
     @staticmethod
     def is_vimeo_bookmark(item, url):
@@ -257,7 +326,7 @@ class Eagle:
                 str(item.get('videoID')) == video_id)
 
     def find_vimeo_bookmarks(self, url):
-        return [item for item in self.iter_items() if self.is_vimeo_bookmark(item, url)]
+        return [item for item in self.items_by_url(url) if self.is_vimeo_bookmark(item, url)]
 
     def save_vimeo_bookmark(self, url, name, cache_dir):
         from saffron import vimeo_thumbnail
@@ -301,6 +370,23 @@ class Eagle:
         self.check_library()
         if folder_id not in self.info(item_id).get('folders', []):
             raise RuntimeError('Vimeo 条目的目录关联尚未核实')
+
+    def attach_item_to_folder(self, item_id, folder_id):
+        """Add a regular item to a folder through Eagle Web API v2 and verify it."""
+        if getattr(self, 'write_guard', None) and not self.write_guard():
+            raise RuntimeError('导入已暂停')
+        self.check_library()
+        current = self.info(item_id)
+        if not current or current.get('isDeleted'):
+            raise RuntimeError('待关联 Eagle 条目不存在或已删除')
+        folders = list(dict.fromkeys(current.get('folders', []) + [folder_id]))
+        updated = self.request('/api/v2/item/update', {'id': item_id, 'folders': folders})
+        self.check_library()
+        if not isinstance(updated, dict) or folder_id not in updated.get('folders', []):
+            updated = self.info(item_id)
+        if not updated or folder_id not in updated.get('folders', []):
+            raise RuntimeError('Eagle v2 文件夹关联尚未回读确认')
+        return updated
 
     def folder(self, names):
         self.check_library()

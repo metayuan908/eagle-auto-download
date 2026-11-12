@@ -43,7 +43,7 @@ python3 <skill-dir>/scripts/collector.py --config <work-dir>/config.local.json i
 
 定期采集时先 `scan`，仅处理新增项目：对每个新案例运行 `inspect-project`，核实名字、标签、简介和明确的项目 Logo，再运行 `run --execute`。没有新增时仍可运行 `run --execute`，以对账并导入未提交队列；uncertain 默认不重发，恢复细节见 [对账与恢复](recovery.md)。不要重新初始化已有基线来掩盖待处理项目。
 
-待导入文件必须仍可从本机原路径读取。队列优先按保存或返回的 Eagle ID、原件哈希及项目关联对账，名称和 URL 只作辅助，兼容旧标记。`uncertain` 查无匹配时保留状态；只有用户明确要求重试才按 [对账与恢复](recovery.md) 限定单条，最多重提一次。不能手工重置状态或尝试次数来绕过保护。
+待导入文件必须仍可从本机原路径读取。队列优先按保存或返回的 Eagle ID、原件哈希及项目关联对账，名称和 URL 只作辅助，兼容旧标记。大型资源库全库分页使用 V2；目录内对账使用 V1 文件夹筛选，Vimeo 书签按精确来源 URL 走 V2 查询，避免全库新增后分页漂移。`uncertain` 查无匹配时保留状态；只有用户明确要求重试才按 [对账与恢复](recovery.md) 限定单条，最多重提一次。不能手工重置状态或尝试次数来绕过保护。
 
 内嵌数据型 适配器从项目正文读取明确的素材链接，并仅把正文 `heroGroup.brandLogo` 识别为项目 Logo。内容平台型 适配器收集项目页主体中的 Contentful 原始图片与视频链接，排除“Related Projects”推荐内容；内容管理系统另提供的 ZIP 包不下载。内容平台型 只在文件名明确标注 Logo、Wordmark 或 Logotype 时标记为项目 Logo。页面块型 适配器读取 Next.js `__NEXT_DATA__` 中的 `pageBlocks` 和当前案例顶部 `cover`，排除推荐卡片；CMS 直链图片和视频按原格式采集。Vimeo 视频文件获取参阅 [外链视频下载](external-video.md)，使用最高可用画质和音轨，无损合并并完整校验。外链书签使用公开 oEmbed 海报生成预览；书签不算已下载视频。Eagle 未能核实的书签保留 `uncertain`，只对账、不重发。目录和封面通过 Eagle 本机 API 操作，不直接改库内部文件。封面接口依赖 Eagle 4.0 本机脚本接口，其他版本需先验证。SVG 安全校验后保留 SVG 原格式；静态 WebP 转为 JPG，动画 WebP 保留动画并另生成 JPG 预览。
 

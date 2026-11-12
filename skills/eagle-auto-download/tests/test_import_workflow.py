@@ -72,12 +72,17 @@ class WorkflowTests(unittest.TestCase):
             return {'path': str(self.library)}
         if url.path == '/api/folder/list':
             return copy.deepcopy(self.folders)
-        if url.path == '/api/item/list':
+        if url.path in ('/api/item/list', '/api/v2/item/get'):
             rows = [copy.deepcopy(x) for x in self.store.values() if not x.get('isDeleted')]
             if query.get('folders'):
                 rows = [x for x in rows if query['folders'][0] in x['folders']]
             offset = int(query.get('offset', ['0'])[0])
-            return rows[offset:offset+int(query.get('limit', ['200'])[0])]
+            if query.get('url'):
+                rows = [x for x in rows if x.get('url') == query['url'][0]]
+            page = rows[offset:offset+int(query.get('limit', ['200'])[0])]
+            if url.path == '/api/v2/item/get':
+                return {'data': page, 'total': len(rows)}
+            return page
         if url.path == '/api/item/info':
             return copy.deepcopy(self.store.get(query['id'][0]))
         if url.path == '/api/v2/folder/create':
@@ -160,7 +165,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(result, 'accepted')
             self.assertEqual(json.loads(ids), ['created-0'])
             self.assertEqual(db.execute('SELECT count(*) FROM files').fetchone()[0], 1)
-        self.assertEqual(sum(url.startswith('/api/item/list?') for url, _ in self.calls), 1)
+        self.assertEqual(sum(url.startswith('/api/v2/item/get?') for url, _ in self.calls), 1)
 
     def test_new_file_combines_final_content_and_metadata_readback(self):
         self.enqueue()
@@ -356,7 +361,7 @@ class WorkflowTests(unittest.TestCase):
         self.enqueue('second', {**self.record, 'sha256': sha256(image), 'local_path': str(image), 'page_order': 2})
         self.assertEqual(self.run_import()['imported'], 2)
         self.assertEqual(sum(url == '/api/folder/list' for url, _ in self.calls), 2)
-        full_scans = [url for url, _ in self.calls if url.startswith('/api/item/list?') and 'folders=' not in url]
+        full_scans = [url for url, _ in self.calls if url.startswith('/api/v2/item/get?') and 'folders=' not in url]
         self.assertEqual(len(full_scans), 1)
         descriptions = [url for url, _ in self.calls if url == '/api/v2/folder/update']
         self.assertEqual(len(descriptions), 1)
@@ -440,12 +445,32 @@ class WorkflowTests(unittest.TestCase):
                     start = offset * 200 if mode == 'pages' else offset
                     return rows[start:start+200]
                 with patch.object(eagle, 'check_library', return_value={}), patch.object(eagle, 'request', side_effect=request):
-                    self.assertEqual([r['id'] for r in eagle.items()], [str(n) for n in range(450)])
+                    self.assertEqual([r['id'] for r in eagle.iter_items({'folders': 'test-folder'})], [str(n) for n in range(450)])
+
+    def test_existing_file_after_ten_thousand_rows_is_reused_despite_repeated_id(self):
+        existing = self.seed(name=payload(self.record)['name'], url=self.record['project_url'])
+        existing.update(annotation=self.record['project_summary'], tags=['文化', '展览'])
+        fillers = [{'id': f'other-{n}', 'ext': 'png', 'size': 1} for n in range(10001)]
+        rows = [*fillers, existing, {**existing, 'lastModified': 1}]
+        original = self.dispatch
+
+        def dispatch(endpoint, data):
+            if endpoint.startswith('/api/v2/item/get?'):
+                offset = int(parse_qs(urlsplit(endpoint).query)['offset'][0])
+                return {'data': rows[offset:offset+200], 'total': len(rows)}
+            return original(endpoint, data)
+
+        self.dispatch = dispatch
+        self.enqueue()
+        report = self.run_import()
+        self.assertEqual(report['failed'], [])
+        self.assertEqual(report['reconciled'], 1)
+        self.assertEqual(self.creates(), [])
 
     def test_ignored_pagination_is_rejected_instead_of_repeating_or_missing_items(self):
         eagle = Eagle(self.config['eagle'])
         with patch.object(eagle, 'check_library', return_value={}), \
-             patch.object(eagle, 'request', return_value=[{'id':str(n)} for n in range(200)]):
+             patch.object(eagle, 'request', return_value={'data': [{'id': str(n)} for n in range(200)], 'total': 400}):
             with self.assertRaisesRegex(RuntimeError,'分页'):
                 eagle.items()
 

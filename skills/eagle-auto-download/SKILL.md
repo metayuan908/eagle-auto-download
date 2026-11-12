@@ -2,7 +2,7 @@
 name: eagle-auto-download
 description: 批量采集品牌工作室官网和 Behance 项目中的图片、动图及视频，整理元数据并导入 Eagle。支持多种官网正文结构、Behance 项目及 Vimeo / Adobe CCV 视频；其他网站先检查正文结构。
 metadata:
-  version: "1.7.0"
+  version: "1.7.1"
 ---
 
 # Eagle 自动化下载

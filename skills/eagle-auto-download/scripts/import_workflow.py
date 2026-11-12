@@ -219,8 +219,7 @@ def import_assets(config, execute=False, project_urls=None, retry_uncertain=Fals
                     if bookmark:
                         eagle.attach_vimeo_bookmark(item['id'], folder_id)
                     else:
-                        eagle.post('/api/item/update', {'id': item['id'],
-                                   'folders': list(dict.fromkeys(item.get('folders', []) + [folder_id]))})
+                        item = eagle.attach_item_to_folder(item['id'], folder_id)
                 if shared:
                     current = eagle.info(item['id'])
                     if not current or folder_id not in current.get('folders', []):
