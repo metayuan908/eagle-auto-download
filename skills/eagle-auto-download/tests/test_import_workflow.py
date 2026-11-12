@@ -68,8 +68,8 @@ class WorkflowTests(unittest.TestCase):
         self.calls.append((endpoint, copy.deepcopy(data)))
         url = urlsplit(endpoint)
         query = parse_qs(url.query)
-        if url.path == '/api/library/info':
-            return {'library': {'path': str(self.library)}}
+        if url.path == '/api/v2/library/info':
+            return {'path': str(self.library)}
         if url.path == '/api/folder/list':
             return copy.deepcopy(self.folders)
         if url.path == '/api/item/list':
@@ -80,8 +80,8 @@ class WorkflowTests(unittest.TestCase):
             return rows[offset:offset+int(query.get('limit', ['200'])[0])]
         if url.path == '/api/item/info':
             return copy.deepcopy(self.store.get(query['id'][0]))
-        if url.path == '/api/folder/create':
-            folder = {'id': 'folder-'+str(len(self.folders)), 'name': data['folderName'], 'children': []}
+        if url.path == '/api/v2/folder/create':
+            folder = {'id': 'folder-'+str(len(self.folders)), 'name': data['name'], 'children': []}
             def find(rows, item_id):
                 for row in rows:
                     if row['id'] == item_id:
@@ -94,31 +94,31 @@ class WorkflowTests(unittest.TestCase):
             else:
                 self.folders.append(folder)
             return copy.deepcopy(folder)
-        if url.path == '/api/folder/update':
+        if url.path == '/api/v2/folder/update':
             def update(rows):
                 for row in rows:
-                    if row['id'] == data['folderId']:
-                        row['description'] = data['newDescription']
+                    if row['id'] == data['id']:
+                        row['description'] = data['description']
                     update(row.get('children', []))
             update(self.folders)
             return None
         if url.path in ('/api/item/update', '/api/v2/item/update'):
             self.store[data['id']].update({k: copy.deepcopy(v) for k, v in data.items() if k != 'id'})
             return None
-        if url.path == '/api/item/addFromPaths':
+        if url.path == '/api/v2/item/add':
             if self.fail_before:
                 raise TimeoutError('Request outcome unknown')
-            incoming = data['items'][0]
+            incoming = data
             item_id = 'created-'+str(len(self.store))
             name = ''.join(ch for ch in incoming['name'] if ch not in '\\/:*?"<>|')
             directory = self.library/'images'/(item_id+'.info')
             directory.mkdir(parents=True)
             shutil.copyfile(incoming['path'], directory/(name+'.jpg'))
             self.store[item_id] = {**incoming, 'id': item_id, 'name': name, 'url': incoming['website'],
-                'ext': 'jpg', 'folders': [data['folderId']], 'size': Path(incoming['path']).stat().st_size}
+                'ext': 'jpg', 'folders': data['folders'], 'size': Path(incoming['path']).stat().st_size}
             if self.fail_after:
                 raise TimeoutError('Server applied request; response lost')
-            return [{'id': item_id}] if self.response_mode == 'ids' else None
+            return {'id': item_id} if self.response_mode == 'ids' else None
         raise AssertionError(endpoint)
 
     def run_import(self, **kwargs):
@@ -126,7 +126,7 @@ class WorkflowTests(unittest.TestCase):
             return import_assets(self.config, True, **kwargs)
 
     def creates(self):
-        return [row for row in self.calls if row[0] == '/api/item/addFromPaths']
+        return [row for row in self.calls if row[0] == '/api/v2/item/add']
 
     def test_completed_project_releases_downloads_but_keeps_shared_pending_source(self):
         downloads = self.config['_paths']['downloads'].resolve()
@@ -204,8 +204,8 @@ class WorkflowTests(unittest.TestCase):
                 reads += 1
                 if reads == 2:
                     switched = True
-            if endpoint == '/api/library/info' and switched:
-                return {'library': {'path': str(self.root/'other.library')}}
+            if endpoint == '/api/v2/library/info' and switched:
+                return {'path': str(self.root/'other.library')}
             return result
         self.dispatch = dispatch
         report = self.run_import()
@@ -358,7 +358,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(sum(url == '/api/folder/list' for url, _ in self.calls), 2)
         full_scans = [url for url, _ in self.calls if url.startswith('/api/item/list?') and 'folders=' not in url]
         self.assertEqual(len(full_scans), 1)
-        descriptions = [url for url, _ in self.calls if url == '/api/folder/update']
+        descriptions = [url for url, _ in self.calls if url == '/api/v2/folder/update']
         self.assertEqual(len(descriptions), 1)
 
     def test_polling_has_real_deadline_and_restores_request_timeout(self):
@@ -399,7 +399,7 @@ class WorkflowTests(unittest.TestCase):
     def test_folder_description_must_be_read_back_before_file_submission(self):
         original_dispatch = self.dispatch
         def reject_description(endpoint, data):
-            if endpoint == '/api/folder/update':
+            if endpoint == '/api/v2/folder/update':
                 return None
             return original_dispatch(endpoint, data)
         self.dispatch = reject_description

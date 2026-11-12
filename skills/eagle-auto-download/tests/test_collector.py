@@ -225,7 +225,7 @@ class PipelineTests(unittest.TestCase):
         eagle = Eagle(self.config['eagle'])
         with patch.object(eagle, 'request', return_value={'library': {'path': '/some/other.library'}}):
             with self.assertRaises(RuntimeError):
-                eagle.post('/api/item/addFromPaths', {'items': []})
+                eagle.post('/api/v2/item/add', {'items': []})
 
     def test_cover_is_saved_and_verified_through_backend(self):
         eagle = Eagle(self.config['eagle'])
@@ -305,7 +305,7 @@ class PipelineTests(unittest.TestCase):
             def find_matching_items(self, expected, marker): return []
             def request(self, endpoint): return {'annotation': ''}
             def post(self, endpoint, payload):
-                if endpoint == '/api/item/addFromPaths': FakeEagle.posts += 1
+                if endpoint == '/api/v2/item/add': FakeEagle.posts += 1
             def await_item(self, *args, **kwargs):
                 return [{**expected, 'id': 'created', 'url': expected['website'], 'folders': ['folder']}]
             def verify_item(self, *args, **kwargs): return {}

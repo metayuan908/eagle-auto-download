@@ -184,8 +184,7 @@ def import_assets(config, execute=False, project_urls=None, retry_uncertain=Fals
                             time.sleep(0.5)
                         returned_ids = [item['id'] for item in matches]
                     else:
-                        response = eagle.post('/api/item/addFromPaths',
-                                              {'items': [payload(record)], 'folderId': folder_id})
+                        response = eagle.post('/api/v2/item/add', {**expected, 'folders': [folder_id]})
                         returned_ids = EagleAPI.response_ids(response)
                     ledger.finish_attempt(db, attempt_id, 'response_received', returned_ids)
                     if not bookmark:
@@ -241,7 +240,7 @@ def import_assets(config, execute=False, project_urls=None, retry_uncertain=Fals
                         report['reused'] += 1
                 else:
                     if bookmark:
-                        eagle.post('/api/item/update', {'id': item['id'], 'name': expected['name'],
+                        eagle.post('/api/v2/item/update', {'id': item['id'], 'name': expected['name'],
                                    'annotation': expected['annotation'], 'tags': expected['tags']})
                     verify_accepted(eagle, record, item['id'], folder_id, file_item=item)
                     if record.get('is_project_logo'):

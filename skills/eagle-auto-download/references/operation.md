@@ -2,7 +2,7 @@
 
 公开 CMS 型 官网、Behance 分页／作者核对、跨站补采与 Adobe CCV 视频见 [专用流程](project-media.md)。可选官方插件的只读状态、启用清单和接口差异见 [插件接口边界](eagle-plugin.md)，按需读取即可。
 
-执行器目前面向 macOS、Python 3.10+ 与 Eagle 4.0，使用 `fcntl`，Windows 尚未支持。运行前确认 Eagle 本机 API 可用，并将 [配置模板](config.example.json) 复制为用户工作目录中的本地配置，填入站点和 `expected_library_path`。不要把个人资源库路径或凭据写入共享模板。
+执行器目前面向 macOS、Python 3.10+ 与 Eagle 4.0 Build 21+，使用 `fcntl`，Windows 尚未支持。素材和文件夹写入使用 Eagle 本机 Web API V2；运行前确认 Eagle 已启动、本机 V2 API 可用，并将 [配置模板](config.example.json) 复制为用户工作目录中的本地配置，填入站点和 `expected_library_path`。不要把个人资源库路径或凭据写入共享模板。
 
 通过本 Skill 目录中的 `scripts/collector.py` 执行命令；可先建立虚拟环境并安装 `scripts/requirements.txt`。示例中的 `<skill-dir>` 指已安装的 Skill 目录，`<work-dir>` 指用户指定的采集工作目录：
 
@@ -17,7 +17,9 @@ python3 <skill-dir>/scripts/collector.py --config <work-dir>/config.local.json i
 
 `discover` 列出项目；`baseline` 记录已知项目但不下载历史素材；`scan` 找出新增项目；`run` 下载并保留待导入队列，`run --execute` 还会尝试导入。`status` 查看本地完成摘要，`status --details` 查看逐条原始状态。默认 `import` 只显示计划；只有目标资源库路径核对正确且用户已授权本次写入时，才使用 `import --execute`。
 
-如果 `/api/library/info` 返回的活动库路径与 `eagle.expected_library_path` 不同，先判断用户是否已授权切换到配置中的这个目标库。已有授权时，通过 `POST /api/library/switch` 提交 `{"libraryPath":"<expected_library_path>"}`，再调用 `/api/library/info` 复核完全一致后继续；这一步用本机 HTTP API 完成，无需 Eagle 前端操作。没有授权时停止写入并询问一次，不能自行切库。切换或复核失败时保持队列不变并报告错误；不要要求用户手动来回切库后再启动任务。
+Eagle 进程可在后台运行，导入写入当前载入的资源库。
+
+如果 `/api/v2/library/info` 返回的活动库路径与 `eagle.expected_library_path` 不同，先判断用户是否已授权切换到该目标库。已有授权时，通过 `POST /api/v2/library/switch` 提交 `{"libraryPath":"<expected_library_path>"}`，再调用 `/api/v2/library/info` 复核完全一致后继续；这一步用本机 HTTP API 完成，无需 Eagle 前端操作。没有授权时停止写入并询问一次，不能自行切库。切换或复核失败时保持队列不变并报告错误；不要要求用户手动来回切库后再启动任务。
 
 准备元数据与导入前必须执行 [导入验收](acceptance.md)。`preflight` 离线报告缺项，实际导入强制执行同一检查；旧队列缺少审核证据时不再直接沿用英文标题和空简介。`pause-import` 持久暂停导入，`resume-import` 仅在用户要求继续后解除暂停。优化 Skill 或测试通过不恢复真实任务。
 

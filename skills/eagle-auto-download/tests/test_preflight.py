@@ -160,7 +160,7 @@ class PreflightTests(unittest.TestCase):
             def find_content_matches(self, *args): return []
             def find_matching_items(self, *args): return []
             def post(self, endpoint, payload):
-                if endpoint == '/api/item/addFromPaths':
+                if endpoint == '/api/v2/item/add':
                     self.submissions += 1
             def await_item(self, *args, **kwargs): return [{'id': 'created'}]
             def verify_file(self, *args): return {'id': 'created', 'folders': ['folder']}

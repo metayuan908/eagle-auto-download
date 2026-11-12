@@ -63,11 +63,12 @@ class Eagle:
         return result.get('data', {k: result[k] for k in ('id', 'ids') if k in result} or None)
 
     def check_library(self):
-        info = self.request('/api/library/info')
-        actual = info.get('library', {}).get('path')
+        info = self.request('/api/v2/library/info')
+        actual = info.get('path')
         if not actual or Path(actual).resolve() != self.expected:
             raise RuntimeError('当前 Eagle 库与配置的测试库不一致，请先在 Eagle 中打开测试库')
-        return info
+        return {'library': {'path': actual, 'name': info.get('name')},
+                'applicationVersion': info.get('applicationVersion')}
 
     def post(self, endpoint, payload):
         if getattr(self, 'write_guard', None) and not self.write_guard():
@@ -315,10 +316,10 @@ class Eagle:
             if matches:
                 folder = matches[0]
             else:
-                payload = {'folderName': name}
+                payload = {'name': name}
                 if parent:
                     payload['parent'] = parent
-                folder = self.post('/api/folder/create', payload)
+                folder = self.post('/api/v2/folder/create', payload)
                 if not isinstance(folder, dict) or not folder.get('id'):
                     raise RuntimeError('Eagle 创建文件夹返回值缺少 ID')
                 children.append(folder)
@@ -340,7 +341,7 @@ class Eagle:
         if folder is None:
             raise RuntimeError('项目文件夹缓存缺失')
         if folder.get('description', '') != description:
-            self.post('/api/folder/update', {'folderId': folder_id, 'newDescription': description})
+            self.post('/api/v2/folder/update', {'id': folder_id, 'description': description})
             self.metrics['folder_tree_reads'] += 1
             self._folders = self.request('/api/folder/list')
             self.check_library()
